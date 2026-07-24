@@ -1,0 +1,1 @@
+"""Prompt Vault CLI package."""
