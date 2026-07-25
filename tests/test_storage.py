@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from src.errors import StorageError
+from src.errors import (
+    DuplicatePromptError,
+    PromptNotFoundError,
+    StorageError,
+    ValidationError,
+)
 from src.models import Prompt
 from src.storage import PromptStorage
 
@@ -238,3 +243,275 @@ def test_failed_save_preserves_original_and_removes_temporary_file(
     assert str(data_path) in str(exc_info.value)
     assert data_path.read_text(encoding="utf-8") == original_contents
     assert list(tmp_path.glob(".data.json.*.tmp")) == []
+
+
+def test_add_prompt_to_missing_data_file(tmp_path: Path) -> None:
+    data_path = tmp_path / "data.json"
+    storage = PromptStorage(data_path)
+    prompt = Prompt(name="Code-Review", content="Review this code.")
+
+    storage.add(prompt)
+
+    assert data_path.is_file()
+    assert storage.load() == [prompt]
+    assert storage.load()[0].name == "Code-Review"
+
+
+def test_adding_multiple_prompts_preserves_insertion_order(
+    tmp_path: Path,
+) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    prompts = [
+        Prompt(name="summarize", content="Summarize this text."),
+        Prompt(name="code-review", content="Review this code."),
+        Prompt(name="translate", content="Translate this text."),
+    ]
+
+    for prompt in prompts:
+        storage.add(prompt)
+
+    assert storage.list_all() == prompts
+
+
+def test_added_prompts_persist_after_reloading(tmp_path: Path) -> None:
+    data_path = tmp_path / "data.json"
+    prompt = Prompt(name="code-review", content="Review this code.")
+
+    PromptStorage(data_path).add(prompt)
+    reloaded_storage = PromptStorage(data_path)
+
+    assert reloaded_storage.list_all() == [prompt]
+
+
+def test_exact_duplicate_name_is_rejected(tmp_path: Path) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    storage.add(Prompt(name="code-review", content="Review this code."))
+
+    with pytest.raises(DuplicatePromptError, match="already exists"):
+        storage.add(Prompt(name="code-review", content="Different content."))
+
+
+def test_case_only_duplicate_name_is_rejected(tmp_path: Path) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    storage.add(Prompt(name="Code-Review", content="Review this code."))
+
+    with pytest.raises(DuplicatePromptError, match="already exists"):
+        storage.add(Prompt(name="code-review", content="Different content."))
+
+
+def test_duplicate_rejection_does_not_modify_data_file(tmp_path: Path) -> None:
+    data_path = tmp_path / "data.json"
+    storage = PromptStorage(data_path)
+    storage.add(Prompt(name="Code-Review", content="Review this code."))
+    original_contents = data_path.read_bytes()
+
+    with pytest.raises(DuplicatePromptError):
+        storage.add(Prompt(name="CODE-REVIEW", content="Different content."))
+
+    assert data_path.read_bytes() == original_contents
+
+
+def test_listing_missing_vault_returns_empty_list(tmp_path: Path) -> None:
+    storage = PromptStorage(tmp_path / "missing.json")
+
+    assert storage.list_all() == []
+
+
+def test_listing_returns_prompts_in_insertion_order(tmp_path: Path) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    prompts = [
+        Prompt(name="summarize", content="Summarize this text."),
+        Prompt(name="code-review", content="Review this code."),
+    ]
+    storage.save(prompts)
+
+    assert storage.list_all() == prompts
+
+
+def test_listing_returns_an_independent_collection(tmp_path: Path) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    prompt = Prompt(name="code-review", content="Review this code.")
+    storage.save([prompt])
+
+    listed_prompts = storage.list_all()
+    listed_prompts.clear()
+
+    assert storage.list_all() == [prompt]
+
+
+def test_search_by_exact_name(tmp_path: Path) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    prompt = Prompt(name="code-review", content="Review this code.")
+    storage.save([prompt])
+
+    assert storage.search("code-review") == [prompt]
+
+
+def test_search_by_partial_name(tmp_path: Path) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    prompt = Prompt(name="code-review", content="Review this code.")
+    storage.save([prompt])
+
+    assert storage.search("review") == [prompt]
+
+
+def test_search_is_case_insensitive_and_strips_query(
+    tmp_path: Path,
+) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    prompt = Prompt(name="Code-Review", content="Review this code.")
+    storage.save([prompt])
+
+    assert storage.search("  CODE-REVIEW  ") == [prompt]
+
+
+def test_search_results_preserve_insertion_order(tmp_path: Path) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    prompts = [
+        Prompt(name="review-summary", content="Summarize a review."),
+        Prompt(name="translate", content="Translate this text."),
+        Prompt(name="code-review", content="Review this code."),
+        Prompt(name="review-email", content="Review this email."),
+    ]
+    storage.save(prompts)
+
+    assert storage.search("review") == [prompts[0], prompts[2], prompts[3]]
+
+
+def test_search_with_no_matches_returns_empty_list(tmp_path: Path) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    storage.save(
+        [Prompt(name="code-review", content="Review this code.")]
+    )
+
+    assert storage.search("translate") == []
+
+
+@pytest.mark.parametrize("query", ["", "   ", "\n\t"])
+def test_empty_search_query_is_rejected(
+    tmp_path: Path,
+    query: str,
+) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+
+    with pytest.raises(ValidationError, match="Search query cannot be empty"):
+        storage.search(query)
+
+
+@pytest.mark.parametrize("query", [None, 123, ["review"]])
+def test_wrong_search_query_type_is_rejected(
+    tmp_path: Path,
+    query: object,
+) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+
+    with pytest.raises(ValidationError, match="must be a string"):
+        storage.search(query)  # type: ignore[arg-type]
+
+
+def test_search_does_not_modify_data_file(tmp_path: Path) -> None:
+    data_path = tmp_path / "data.json"
+    storage = PromptStorage(data_path)
+    storage.save(
+        [Prompt(name="code-review", content="Review this code.")]
+    )
+    original_contents = data_path.read_bytes()
+
+    storage.search("review")
+
+    assert data_path.read_bytes() == original_contents
+
+
+def test_delete_existing_prompt(tmp_path: Path) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    prompt = Prompt(name="code-review", content="Review this code.")
+    storage.save([prompt])
+
+    storage.delete("code-review")
+
+    assert storage.list_all() == []
+
+
+def test_delete_is_case_insensitive_and_strips_name(
+    tmp_path: Path,
+) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    prompt = Prompt(name="Code-Review", content="Review this code.")
+    storage.save([prompt])
+
+    storage.delete("  CODE-REVIEW  ")
+
+    assert storage.list_all() == []
+
+
+def test_delete_returns_removed_prompt(tmp_path: Path) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    prompt = Prompt(name="Code-Review", content="Review this code.")
+    storage.save([prompt])
+
+    deleted_prompt = storage.delete("code-review")
+
+    assert deleted_prompt == prompt
+    assert deleted_prompt.name == "Code-Review"
+
+
+def test_other_prompts_remain_after_deletion(tmp_path: Path) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    prompts = [
+        Prompt(name="summarize", content="Summarize this text."),
+        Prompt(name="code-review", content="Review this code."),
+        Prompt(name="translate", content="Translate this text."),
+    ]
+    storage.save(prompts)
+
+    storage.delete("code-review")
+
+    assert storage.list_all() == [prompts[0], prompts[2]]
+
+
+def test_delete_nonexistent_prompt_raises_not_found(
+    tmp_path: Path,
+) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+    storage.save(
+        [Prompt(name="code-review", content="Review this code.")]
+    )
+
+    with pytest.raises(PromptNotFoundError, match="does not exist"):
+        storage.delete("missing")
+
+
+def test_failed_deletion_does_not_modify_data_file(tmp_path: Path) -> None:
+    data_path = tmp_path / "data.json"
+    storage = PromptStorage(data_path)
+    storage.save(
+        [Prompt(name="code-review", content="Review this code.")]
+    )
+    original_contents = data_path.read_bytes()
+
+    with pytest.raises(PromptNotFoundError):
+        storage.delete("missing")
+
+    assert data_path.read_bytes() == original_contents
+
+
+@pytest.mark.parametrize("name", ["", "   ", "\n\t"])
+def test_empty_delete_name_is_rejected(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+
+    with pytest.raises(ValidationError, match="Prompt name cannot be empty"):
+        storage.delete(name)
+
+
+@pytest.mark.parametrize("name", [None, 123, ["code-review"]])
+def test_wrong_delete_name_type_is_rejected(
+    tmp_path: Path,
+    name: object,
+) -> None:
+    storage = PromptStorage(tmp_path / "data.json")
+
+    with pytest.raises(ValidationError, match="must be a string"):
+        storage.delete(name)  # type: ignore[arg-type]
