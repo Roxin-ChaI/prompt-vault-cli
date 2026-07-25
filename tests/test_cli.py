@@ -1,5 +1,8 @@
 """Tests for the Prompt Vault command-line interface."""
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -414,3 +417,46 @@ def test_malformed_json_returns_one_without_traceback(
     assert captured.err.startswith("Error: ")
     assert str(storage.data_path) in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_empty_data_file_returns_one_without_traceback(
+    storage: PromptStorage,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    storage.data_path.write_text("", encoding="utf-8")
+
+    result = main(["list"], storage)
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert captured.out == ""
+    assert captured.err.startswith("Error:")
+    assert "is empty" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_module_entry_point_lists_empty_vault(
+    tmp_path: Path,
+) -> None:
+    repository_root = Path(__file__).resolve().parents[1]
+    environment = os.environ.copy()
+    existing_pythonpath = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        os.pathsep.join((str(repository_root), existing_pythonpath))
+        if existing_pythonpath
+        else str(repository_root)
+    )
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "src.main", "list"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "No prompts stored.\n"
+    assert result.stderr == ""

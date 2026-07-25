@@ -108,7 +108,9 @@ def main(
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    return 0
+    raise AssertionError(
+        f"Unhandled command: {arguments.command}"
+    )
 
 
 if __name__ == "__main__":

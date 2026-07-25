@@ -85,7 +85,14 @@ Responsibilities:
 - Dispatch commands to storage operations.
 - Format successful output for people to read.
 - Translate known application errors into clear messages and exit codes.
-- Provide a testable `main(argv=None, data_path=None) -> int`.
+- Provide a testable command entry point with dependency injection:
+
+  ```python
+  main(
+      argv: Sequence[str] | None = None,
+      storage: PromptStorage | None = None,
+  ) -> int
+  ```
 - Call `raise SystemExit(main())` only at the module entry point.
 
 ### Test files

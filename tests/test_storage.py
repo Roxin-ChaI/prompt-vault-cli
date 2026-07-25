@@ -144,6 +144,44 @@ def test_malformed_json_raises_storage_error(tmp_path: Path) -> None:
     assert str(data_path) in str(exc_info.value)
 
 
+def test_invalid_utf8_raises_storage_error_without_altering_file(
+    tmp_path: Path,
+) -> None:
+    data_path = tmp_path / "data.json"
+    invalid_contents = b"\xff\xfe\xfa"
+    data_path.write_bytes(invalid_contents)
+
+    with pytest.raises(StorageError, match="Could not read data file") as exc_info:
+        PromptStorage(data_path).load()
+
+    assert str(data_path) in str(exc_info.value)
+    assert data_path.read_bytes() == invalid_contents
+
+
+def test_os_error_while_reading_is_wrapped_and_chained(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_path = tmp_path / "data.json"
+    data_path.write_text("[]\n", encoding="utf-8")
+    read_error = OSError("simulated read failure")
+
+    def fail_read_text(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ) -> str:
+        raise read_error
+
+    monkeypatch.setattr(Path, "read_text", fail_read_text)
+
+    with pytest.raises(StorageError, match="Could not read data file") as exc_info:
+        PromptStorage(data_path).load()
+
+    assert str(data_path) in str(exc_info.value)
+    assert exc_info.value.__cause__ is read_error
+
+
 @pytest.mark.parametrize(
     "data",
     [
