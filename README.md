@@ -1,5 +1,7 @@
 # Prompt Vault CLI
 
+**English** | [简体中文](README.zh-CN.md)
+
 Prompt Vault CLI is a lightweight local command-line application for storing and managing reusable prompt templates in a JSON file.
 
 ## Features
@@ -179,6 +181,7 @@ prompt-vault-cli/
 ├── REQUIREMENTS.md
 ├── IMPLEMENTATION_PLAN.md
 ├── README.md
+├── README.zh-CN.md
 ├── LEARNING_LOG.md
 ├── src/
 │   ├── __init__.py
